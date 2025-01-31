@@ -9,48 +9,65 @@
             font-family: Arial, sans-serif;
             margin: 0;
             padding: 0;
-            background-color: #e0f7ff;
-            color: #333;
-            text-align: center;
+            background-color: #dbeafe;
+            color: #1e293b;
         }
         header {
-            background: #007fff;
+            background-color: #1d4ed8;
             color: white;
+            text-align: center;
             padding: 20px;
-            font-size: 28px;
+            font-size: 32px;
             font-weight: bold;
         }
-        section {
-            padding: 40px;
-            max-width: 800px;
+        .hero {
+            text-align: center;
+            padding: 60px 20px;
+            background-color: #dbeafe;
+        }
+        .hero h1 {
+            font-size: 48px;
+            margin-bottom: 20px;
+        }
+        .hero p {
+            font-size: 20px;
+            margin-bottom: 30px;
+        }
+        .form-container {
+            background: white;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            border-radius: 10px;
+            max-width: 400px;
             margin: 0 auto;
+            padding: 20px;
         }
-        .cta-button {
-            display: inline-block;
-            padding: 15px 30px;
-            font-size: 18px;
-            background: #005fcc;
-            color: white;
-            text-decoration: none;
+        .form-container input, .form-container select {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 15px;
+            border: 1px solid #ccc;
             border-radius: 5px;
-            margin-top: 20px;
-            transition: background 0.3s;
+            font-size: 16px;
         }
-        .cta-button:hover {
-            background: #003f99;
-        }
-        ul {
-            list-style-type: none;
-            padding: 0;
-        }
-        ul li {
+        .form-container button {
+            width: 100%;
+            background-color: #1d4ed8;
+            color: white;
             font-size: 18px;
-            margin: 10px 0;
+            padding: 10px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        .form-container button:hover {
+            background-color: #153e9f;
         }
         footer {
-            background: #005fcc;
-            color: white;
+            text-align: center;
             padding: 10px;
+            background-color: #1d4ed8;
+            color: white;
             font-size: 14px;
         }
     </style>
@@ -59,32 +76,29 @@
     <header>
         AI Agent Generation - Future AI Solutions
     </header>
-    
-    <section>
-        <h1>Revolutionize Your Business with AI Agents</h1>
-        <p>We are world leaders in creating AI agents that help businesses grow, streamline workflows, and boost sales.</p>
-        <a href="#contact" class="cta-button">Contact Us</a>
-    </section>
-    
-    <section>
-        <h2>What We Offer</h2>
-        <p>Our AI solutions are designed to elevate your business to the next level through automation, data analysis, and intelligent assistants.</p>
-        <ul>
-            <li>Automated Customer Support</li>
-            <li>AI-Driven Sales Strategies</li>
-            <li>Workflow Optimization</li>
-            <li>Market Analysis with Machine Learning</li>
-        </ul>
-    </section>
-    
-    <section id="contact">
-        <h2>Contact Us</h2>
-        <p>Want to learn how we can help your business thrive with AI? Reach out to us today!</p>
-        <a href="mailto:contact@aiagentgeneration.com" class="cta-button">Send Email</a>
+
+    <section class="hero">
+        <h1>Hire the Best AI Agents for Your Business</h1>
+        <p>Streamline your processes, boost your sales, and scale your business with our state-of-the-art AI solutions.</p>
+        <div class="form-container">
+            <h2>Get Started</h2>
+            <form>
+                <input type="text" placeholder="First Name" required>
+                <input type="text" placeholder="Last Name" required>
+                <input type="email" placeholder="Work Email" required>
+                <select required>
+                    <option value="">Company Size</option>
+                    <option value="small">1-10 employees</option>
+                    <option value="medium">11-50 employees</option>
+                    <option value="large">51+ employees</option>
+                </select>
+                <button type="submit">Book a Demo</button>
+            </form>
+        </div>
     </section>
 
     <footer>
-        &copy; 2025 AI Agent Generation. All rights reserved.
+        &copy; 2025 AI Agent Generation. Trusted by global leaders.
     </footer>
 </body>
 </html>

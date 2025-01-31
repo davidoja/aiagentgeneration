@@ -9,7 +9,7 @@
             font-family: Arial, sans-serif;
             margin: 0;
             padding: 0;
-            background-color: #dbeafe;
+            background-color: #f3f4f6;
             color: #1e293b;
         }
         header {
@@ -21,47 +21,70 @@
             font-weight: bold;
         }
         .hero {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
             text-align: center;
             padding: 60px 20px;
             background-color: #dbeafe;
+            background-image: url('https://via.placeholder.com/1200x400');
+            background-size: cover;
+            background-position: center;
+            color: #fff;
         }
         .hero h1 {
             font-size: 48px;
             margin-bottom: 20px;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
         }
         .hero p {
             font-size: 20px;
             margin-bottom: 30px;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
         }
-        .form-container {
-            background: white;
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-            border-radius: 10px;
-            max-width: 400px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-        .form-container input, .form-container select {
-            width: 100%;
-            padding: 10px;
-            margin-bottom: 15px;
-            border: 1px solid #ccc;
-            border-radius: 5px;
-            font-size: 16px;
-        }
-        .form-container button {
-            width: 100%;
-            background-color: #1d4ed8;
+        .hero .cta-button {
+            background-color: #1e40af;
             color: white;
+            padding: 15px 30px;
             font-size: 18px;
-            padding: 10px;
             border: none;
             border-radius: 5px;
             cursor: pointer;
             transition: background-color 0.3s;
         }
-        .form-container button:hover {
+        .hero .cta-button:hover {
             background-color: #153e9f;
+        }
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            padding: 40px;
+            background-color: #fff;
+        }
+        .feature {
+            background: #ffffff;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            border-radius: 10px;
+            padding: 20px;
+            text-align: center;
+        }
+        .feature h3 {
+            font-size: 20px;
+            margin-bottom: 10px;
+        }
+        .feature p {
+            font-size: 16px;
+        }
+        .partners {
+            text-align: center;
+            padding: 20px;
+            background-color: #f3f4f6;
+        }
+        .partners img {
+            margin: 10px;
+            width: 100px;
         }
         footer {
             text-align: center;
@@ -78,27 +101,40 @@
     </header>
 
     <section class="hero">
-        <h1>Hire the Best AI Agents for Your Business</h1>
-        <p>Streamline your processes, boost your sales, and scale your business with our state-of-the-art AI solutions.</p>
-        <div class="form-container">
-            <h2>Get Started</h2>
-            <form>
-                <input type="text" placeholder="First Name" required>
-                <input type="text" placeholder="Last Name" required>
-                <input type="email" placeholder="Work Email" required>
-                <select required>
-                    <option value="">Company Size</option>
-                    <option value="small">1-10 employees</option>
-                    <option value="medium">11-50 employees</option>
-                    <option value="large">51+ employees</option>
-                </select>
-                <button type="submit">Book a Demo</button>
-            </form>
+        <h1>Revolutionize Your Business with AI</h1>
+        <p>Streamline your processes, boost your sales, and achieve global success with cutting-edge AI solutions.</p>
+        <button class="cta-button">Get Started</button>
+    </section>
+
+    <section class="features">
+        <div class="feature">
+            <h3>Automated Support</h3>
+            <p>Reduce response times and enhance customer satisfaction with AI-driven support.</p>
+        </div>
+        <div class="feature">
+            <h3>AI Sales Strategies</h3>
+            <p>Optimize your sales funnel and increase revenue using intelligent analytics.</p>
+        </div>
+        <div class="feature">
+            <h3>Workflow Optimization</h3>
+            <p>Save time and resources by automating repetitive tasks and streamlining workflows.</p>
+        </div>
+        <div class="feature">
+            <h3>Market Analysis</h3>
+            <p>Leverage machine learning for accurate market predictions and better decisions.</p>
         </div>
     </section>
 
+    <section class="partners">
+        <h2>Trusted by Leading Brands</h2>
+        <img src="https://via.placeholder.com/100" alt="Brand 1">
+        <img src="https://via.placeholder.com/100" alt="Brand 2">
+        <img src="https://via.placeholder.com/100" alt="Brand 3">
+        <img src="https://via.placeholder.com/100" alt="Brand 4">
+    </section>
+
     <footer>
-        &copy; 2025 AI Agent Generation. Trusted by global leaders.
+        &copy; 2025 AI Agent Generation. Empowering businesses worldwide.
     </footer>
 </body>
 </html>

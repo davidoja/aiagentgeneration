@@ -2,7 +2,7 @@
 // stay in Supabase secrets and finance_oauth_tokens. Deploy only after review:
 //   supabase functions deploy finance-gateway --no-verify-jwt
 // There is no Supabase JWT on these calls. See README.md.
-import { createFortnoxClient } from "./fortnox.ts";
+import { createFortnoxClient, DEFAULT_FORTNOX_REDIRECT_URI } from "./fortnox.ts";
 import { handleFinanceGateway } from "./handler.ts";
 import { createServiceRoleClient, createSupabaseFinanceStore } from "./store.ts";
 
@@ -24,6 +24,8 @@ Deno.serve((req) => {
   try {
     return handleFinanceGateway(req, {
       adminToken: Deno.env.get("FINANCE_ADMIN_TOKEN") ?? "",
+      redirectUri: Deno.env.get("FORTNOX_REDIRECT_URI") || DEFAULT_FORTNOX_REDIRECT_URI,
+      expectedOauthState: Deno.env.get("FORTNOX_OAUTH_STATE") ?? "",
       store: createSupabaseFinanceStore(createServiceRoleClient()),
       fortnox: createFortnoxClient({
         clientId: Deno.env.get("FORTNOX_CLIENT_ID") ?? "",

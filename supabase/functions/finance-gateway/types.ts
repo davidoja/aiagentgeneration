@@ -88,6 +88,13 @@ export type RefreshResult = {
   expiresIn: number;
 };
 
+export type ExchangeResult = {
+  accessToken: string;
+  refreshToken: string;
+  expiresIn: number;
+  scope: string;
+};
+
 export type FortnoxResult = {
   status: number;
   body: unknown;
@@ -101,6 +108,7 @@ export type ArchiveUpload = {
 
 export type FortnoxClient = {
   refresh(refreshToken: string): Promise<RefreshResult>;
+  exchangeCode(input: { code: string; redirectUri: string }): Promise<ExchangeResult>;
   request(input: {
     accessToken: string;
     method: "GET" | "POST" | "PUT";

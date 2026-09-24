@@ -1,5 +1,5 @@
 import { assertEquals, assertOk } from "./assert.ts";
-import { createFortnoxClient, decodeArchive } from "./fortnox.ts";
+import { createFortnoxClient, decodeArchive, extractOAuthCallback } from "./fortnox.ts";
 
 Deno.test("refresh posts the rotated grant and API calls use only the bearer token", async () => {
   const seen: Array<{ url: string; authorization: string; body: string; contentType: string | null }> = [];
@@ -71,4 +71,39 @@ Deno.test("refresh posts the rotated grant and API calls use only the bearer tok
   assertEquals(seen[2].url, "https://api.fortnox.se/3/archive");
   assertEquals(seen[2].contentType, null);
   assertOk(!seen[2].authorization.includes("client-secret-placeholder"));
+});
+
+Deno.test("authorization-code exchange posts the code to Fortnox and not into the URL", async () => {
+  const seen: string[] = [];
+  const client = createFortnoxClient({
+    clientId: "client-id-placeholder",
+    clientSecret: "client-secret-placeholder",
+    fetchImpl: (url, init) => {
+      const body = init.body instanceof URLSearchParams ? init.body.toString() : "";
+      seen.push(`${url} ${body}`);
+      return Promise.resolve(new Response(JSON.stringify({
+        access_token: "access-from-code-placeholder",
+        refresh_token: "refresh-from-code-placeholder",
+        expires_in: 3600,
+        scope: "bookkeeping invoice",
+        token_type: "bearer",
+      }), { status: 200 }));
+    },
+  });
+  const exchanged = await client.exchangeCode({
+    code: "placeholder-auth-code",
+    redirectUri: "https://localhost/fortnox-callback",
+  });
+  assertEquals(exchanged.scope, "bookkeeping invoice");
+  assertOk(seen[0].startsWith("https://apps.fortnox.se/oauth-v1/token "));
+  assertOk(seen[0].includes("grant_type=authorization_code"));
+  assertOk(seen[0].includes("code=placeholder-auth-code"));
+  assertOk(seen[0].includes("redirect_uri=https%3A%2F%2Flocalhost%2Ffortnox-callback"));
+  assertOk(!seen[0].startsWith("https://apps.fortnox.se/oauth-v1/token?"));
+  assertEquals(extractOAuthCallback({
+    code: "https://localhost/fortnox-callback?code=callback-code-placeholder&state=state-placeholder",
+  }, "https://localhost/fortnox-callback"), {
+    code: "callback-code-placeholder",
+    state: "state-placeholder",
+  });
 });

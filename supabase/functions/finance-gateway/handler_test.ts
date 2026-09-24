@@ -146,11 +146,20 @@ function memory(tokenHash: string): Memory {
 }
 
 function mockFortnox() {
-  const calls: Array<{ kind: "refresh" | "request"; refreshToken?: string; accessToken?: string; method?: string; path?: string }> = [];
+  const calls: Array<{ kind: "refresh" | "request" | "exchange"; refreshToken?: string; accessToken?: string; method?: string; path?: string; code?: string; redirectUri?: string }> = [];
   const client: FortnoxClient = {
     refresh(refreshToken) {
       calls.push({ kind: "refresh", refreshToken });
       return Promise.resolve({ accessToken: ACCESS_SENTINEL, refreshToken: REFRESH_ROTATED, expiresIn: 3600 });
+    },
+    exchangeCode(input) {
+      calls.push({ kind: "exchange", code: input.code, redirectUri: input.redirectUri });
+      return Promise.resolve({
+        accessToken: ACCESS_SENTINEL,
+        refreshToken: REFRESH_ROTATED,
+        expiresIn: 3600,
+        scope: "bookkeeping companyinformation",
+      });
     },
     request(input) {
       calls.push({ kind: "request", accessToken: input.accessToken, method: input.method, path: input.path });
@@ -192,6 +201,8 @@ async function setup() {
   const logs: Record<string, unknown>[] = [];
   const deps: GatewayDeps = {
     adminToken: ADMIN_TOKEN,
+    redirectUri: "https://localhost/fortnox-callback",
+    expectedOauthState: "",
     store,
     fortnox: fortnox.client,
     now: () => NOW,
@@ -615,4 +626,74 @@ Deno.test("admin issues an agent token once and can seed a refresh token without
   store.oauth = { accessToken: ACCESS_SENTINEL, refreshToken: REFRESH_ROTATED, accessExpiresAt: "2026-09-24T12:00:00.000Z" };
   const used = await handleFinanceGateway(post(issued, { method: "GET", path: "/3/inbox" }), deps);
   assertEquals((await used.json()).decision, "allowed");
+});
+
+Deno.test("exchanges an authorization code or redirect URL and returns scopes only", async () => {
+  const raw = await setup();
+  const code = "placeholder-auth-code";
+  const response = await handleFinanceGateway(post(ADMIN_TOKEN, { code }, "https://project.example.test/functions/v1/finance-gateway/admin/oauth/exchange-code"), raw.deps);
+  const payload = await response.json();
+  assertEquals(response.status, 200);
+  assertEquals(payload.scopes, ["bookkeeping", "companyinformation"]);
+  assertEquals(payload.fortnoxCalled, true);
+  assertEquals(raw.fortnox.calls[0].kind, "exchange");
+  assertEquals(raw.fortnox.calls[0].code, code);
+  assertEquals(raw.fortnox.calls[0].redirectUri, "https://localhost/fortnox-callback");
+  assertEquals(raw.store.oauth?.accessToken, ACCESS_SENTINEL);
+  assertEquals(raw.store.oauth?.refreshToken, REFRESH_ROTATED);
+  const text = JSON.stringify(payload) + JSON.stringify(raw.store.audit) + JSON.stringify(raw.logs);
+  assertOk(!text.includes(ACCESS_SENTINEL));
+  assertOk(!text.includes(REFRESH_ROTATED));
+  assertOk(!text.includes(code));
+
+  const fromUrl = await setup();
+  const redirectUrl = "https://localhost/fortnox-callback?code=callback-code-placeholder&state=state-placeholder";
+  const pasted = await handleFinanceGateway(post(ADMIN_TOKEN, { redirectUrl }, "https://project.example.test/functions/v1/finance-gateway/admin/oauth/exchange-code"), fromUrl.deps);
+  assertEquals((await pasted.json()).ok, true);
+  assertEquals(fromUrl.fortnox.calls[0].code, "callback-code-placeholder");
+  assertOk(!JSON.stringify(fromUrl.store.audit).includes("callback-code-placeholder"));
+});
+
+Deno.test("requires the configured OAuth state and does not call Fortnox on mismatch", async () => {
+  const { deps, fortnox, store } = await setup();
+  deps.expectedOauthState = "expected-state-placeholder";
+  const mismatch = await handleFinanceGateway(post(ADMIN_TOKEN, {
+    redirectUrl: "https://localhost/fortnox-callback?code=callback-code-placeholder&state=other-state-placeholder",
+  }, "https://project.example.test/functions/v1/finance-gateway/admin/oauth/exchange-code"), deps);
+  assertEquals((await mismatch.json()).reason, "oauth_state");
+  assertEquals(fortnox.calls.length, 0);
+  assertEquals(store.oauth?.refreshToken, REFRESH_SENTINEL);
+
+  const matched = await handleFinanceGateway(post(ADMIN_TOKEN, {
+    code: "https://localhost/fortnox-callback?code=callback-code-placeholder&state=expected-state-placeholder",
+  }, "https://project.example.test/functions/v1/finance-gateway/admin/oauth/exchange-code"), deps);
+  assertEquals((await matched.json()).ok, true);
+  assertEquals(fortnox.calls.length, 1);
+
+  const wrongHost = await setup();
+  const rejected = await handleFinanceGateway(post(ADMIN_TOKEN, {
+    redirectUrl: "https://evil.example/fortnox-callback?code=callback-code-placeholder",
+  }, "https://project.example.test/functions/v1/finance-gateway/admin/oauth/exchange-code"), wrongHost.deps);
+  assertEquals((await rejected.json()).reason, "redirect_mismatch");
+  assertEquals(wrongHost.fortnox.calls.length, 0);
+});
+
+Deno.test("an agent token cannot exchange a Fortnox code, and a failed save keeps the code out of the response", async () => {
+  const agent = await setup();
+  const blocked = await handleFinanceGateway(post(AGENT_TOKEN, {
+    code: "placeholder-auth-code",
+  }, "https://project.example.test/functions/v1/finance-gateway/admin/oauth/exchange-code"), agent.deps);
+  assertEquals(blocked.status, 401);
+  assertEquals(agent.fortnox.calls.length, 0);
+
+  const failed = await setup();
+  failed.store.failOauthSave = true;
+  const response = await handleFinanceGateway(post(ADMIN_TOKEN, { code: "placeholder-auth-code" }, "https://project.example.test/functions/v1/finance-gateway/admin/oauth/exchange-code"), failed.deps);
+  const payload = await response.json();
+  assertEquals(response.status, 503);
+  assertEquals(payload.reason, "oauth_persist_failed");
+  assertEquals(failed.fortnox.calls.map((call) => call.kind), ["exchange"]);
+  assertEquals(failed.store.oauth?.refreshToken, REFRESH_SENTINEL);
+  assertOk(!JSON.stringify(payload).includes("placeholder-auth-code"));
+  assertOk(!JSON.stringify(payload).includes(ACCESS_SENTINEL));
 });

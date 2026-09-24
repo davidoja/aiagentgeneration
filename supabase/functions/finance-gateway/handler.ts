@@ -1,5 +1,5 @@
 import { matchRoute, normalizeQuery } from "./allowlist.ts";
-import { decodeArchive } from "./fortnox.ts";
+import { decodeArchive, DEFAULT_FORTNOX_REDIRECT_URI, extractOAuthCallback, normalizeRedirectUri, scopesFrom } from "./fortnox.ts";
 import { payloadHash, sha256Hex, timingSafeEqual } from "./hash.ts";
 import { assessWrite, matchApprovals, stockholmDate } from "./policy.ts";
 import { redact } from "./redact.ts";
@@ -7,6 +7,8 @@ import type { AgentRecord, ApprovalRecord, AuditEvent, FinanceStore, FortnoxClie
 
 export type GatewayDeps = {
   adminToken: string;
+  redirectUri: string;
+  expectedOauthState: string;
   store: FinanceStore;
   fortnox: FortnoxClient;
   now: () => Date;
@@ -261,8 +263,8 @@ async function handleAdmin(
     }
   }
 
-  const sensitive = subpath === "/admin/oauth/refresh-token";
-  const hash = sensitive ? await sha256Hex("oauth-refresh-token") : await payloadHash(payload);
+  const sensitive = subpath === "/admin/oauth/refresh-token" || subpath === "/admin/oauth/exchange-code";
+  const hash = sensitive ? await sha256Hex(subpath) : await payloadHash(payload);
 
   const finish = async (status: number, body: Record<string, unknown>, decision: string, reason: string | null) => {
     await audit(deps, baseAudit({
@@ -362,6 +364,41 @@ async function handleAdmin(
         return finish(400, { ok: false, decision: "denied", reason: created.error, fortnoxCalled: false }, "denied", created.error);
       }
       return finish(201, { ok: true, decision: "allowed", fortnoxCalled: false, approvalId: created.id }, "allowed", null);
+    }
+
+    if (req.method === "POST" && subpath === "/admin/oauth/exchange-code") {
+      const redirectUri = normalizeRedirectUri(deps.redirectUri || DEFAULT_FORTNOX_REDIRECT_URI);
+      if (!redirectUri) {
+        return finish(500, { ok: false, decision: "error", reason: "server_misconfigured", fortnoxCalled: false }, "error", "server_misconfigured");
+      }
+      const extracted = extractOAuthCallback(record, redirectUri);
+      if ("error" in extracted) {
+        const status = extracted.error === "server_misconfigured" ? 500 : extracted.error === "oauth_state" ? 403 : 400;
+        return finish(status, { ok: false, decision: status === 500 ? "error" : "denied", reason: extracted.error, fortnoxCalled: false }, status === 500 ? "error" : "denied", extracted.error);
+      }
+      if (deps.expectedOauthState) {
+        if (!extracted.state || !timingSafeEqual(extracted.state, deps.expectedOauthState)) {
+          return finish(403, { ok: false, decision: "denied", reason: "oauth_state", fortnoxCalled: false }, "denied", "oauth_state");
+        }
+      }
+      let exchanged;
+      try {
+        exchanged = await deps.fortnox.exchangeCode({ code: extracted.code, redirectUri });
+      } catch (error) {
+        const unconfigured = error instanceof Error && error.message === "oauth_unconfigured";
+        const reason = unconfigured ? "server_misconfigured" : "oauth_exchange_failed";
+        return finish(unconfigured ? 500 : 502, { ok: false, decision: "error", reason, fortnoxCalled: !unconfigured }, "error", reason);
+      }
+      try {
+        await deps.store.saveOauth({
+          accessToken: exchanged.accessToken,
+          refreshToken: exchanged.refreshToken,
+          accessExpiresAt: new Date(now.getTime() + exchanged.expiresIn * 1000).toISOString(),
+        });
+      } catch {
+        return finish(503, { ok: false, decision: "error", reason: "oauth_persist_failed", fortnoxCalled: true }, "error", "oauth_persist_failed");
+      }
+      return finish(200, { ok: true, decision: "allowed", fortnoxCalled: true, scopes: scopesFrom(exchanged.scope) }, "allowed", null);
     }
 
     if (req.method === "POST" && subpath === "/admin/oauth/refresh-token") {

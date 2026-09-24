@@ -4,6 +4,9 @@ export type CustomerRecord = {
   customer_name: string | null;
   company_name: string | null;
   country: string | null;
+  contact_id: string | null;
+  barber_id: string | null;
+  organization_id: string | null;
   barber_lead_id: string | null;
   shopify_created_at: string | null;
   shopify_updated_at: string | null;
@@ -30,6 +33,9 @@ export type OrderRecord = {
   billing_country: string | null;
   line_items: unknown[];
   raw_payload: unknown;
+  contact_id: string | null;
+  barber_id: string | null;
+  organization_id: string | null;
   barber_lead_id: string | null;
   customer: CustomerRecord | null;
 };
@@ -181,6 +187,9 @@ export function mapCustomer(payload: unknown): CustomerRecord | null {
     customer_name: personName(payload),
     company_name: companyFrom(address),
     country: countryFrom(address),
+    contact_id: null,
+    barber_id: null,
+    organization_id: null,
     barber_lead_id: null,
     shopify_created_at: asTimestamp(payload.created_at),
     shopify_updated_at: asTimestamp(payload.updated_at),
@@ -241,6 +250,9 @@ export function mapOrder(payload: unknown, topic: string): OrderRecord | null {
     billing_country: countryFrom(billing),
     line_items: mapLineItems(payload.line_items),
     raw_payload: payload,
+    contact_id: null,
+    barber_id: null,
+    organization_id: null,
     barber_lead_id: null,
     customer: customerRecord,
   };

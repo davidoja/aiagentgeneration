@@ -1,7 +1,7 @@
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.49.8";
-import type { SyncStore } from "../_shared/handler.ts";
+import type { ConversionInput, PartyQuery, SyncStore } from "../_shared/handler.ts";
 import type { CustomerRecord, OrderRecord } from "../_shared/map.ts";
-import type { BarberLead } from "../_shared/match.ts";
+import type { PartyMatch } from "../_shared/match.ts";
 
 function customerPayload(row: CustomerRecord) {
   return {
@@ -10,6 +10,9 @@ function customerPayload(row: CustomerRecord) {
     customer_name: row.customer_name,
     company_name: row.company_name,
     country: row.country,
+    contact_id: row.contact_id,
+    barber_id: row.barber_id,
+    organization_id: row.organization_id,
     barber_lead_id: row.barber_lead_id,
     shopify_created_at: row.shopify_created_at,
     shopify_updated_at: row.shopify_updated_at,
@@ -38,27 +41,52 @@ function orderPayload(row: OrderRecord) {
     billing_country: row.billing_country,
     line_items: row.line_items,
     raw_payload: row.raw_payload,
+    contact_id: row.contact_id,
+    barber_id: row.barber_id,
+    organization_id: row.organization_id,
     barber_lead_id: row.barber_lead_id,
+  };
+}
+
+function asParty(row: Record<string, unknown> | null): PartyMatch {
+  return {
+    contactId: row?.contact_id ? String(row.contact_id) : null,
+    barberId: row?.barber_id ? String(row.barber_id) : null,
+    organizationId: row?.organization_id ? String(row.organization_id) : null,
+    apifyLeadId: row?.apify_lead_id ? String(row.apify_lead_id) : null,
+    reason: row?.match_reason === "email" || row?.match_reason === "domain" || row?.match_reason === "company"
+      ? row.match_reason
+      : "none",
   };
 }
 
 export function createSupabaseStore(client: SupabaseClient): SyncStore {
   return {
-    async findCandidates(email, domain) {
-      const { data, error } = await client.rpc("shopify_barber_lead_candidates", {
-        p_email: email,
-        p_domain: domain,
+    async matchParty(query: PartyQuery) {
+      const { data, error } = await client.rpc("match_shopify_party", {
+        p_email: query.email,
+        p_company: query.company,
+        p_country: query.country,
       });
       if (error) {
-        throw new Error("lead lookup failed");
+        throw new Error("party match failed");
       }
-      const rows = Array.isArray(data) ? data : [];
-      return rows.map((row: BarberLead) => ({
-        id: String(row.id),
-        domain: row.domain ?? null,
-        emails: row.emails,
-        company_domain_emails: row.company_domain_emails,
-      }));
+      const row = Array.isArray(data) ? data[0] : data;
+      return asParty(row ?? null);
+    },
+
+    async upsertContact(email, fullName) {
+      const { data, error } = await client.rpc("upsert_contact", {
+        p_email: email,
+        p_full_name: fullName,
+        p_consent_status: "unknown",
+        p_source_key: "shopify",
+        p_tags: ["shopify_customer"],
+      });
+      if (error) {
+        throw new Error("contact upsert failed");
+      }
+      return data ? String(data) : null;
     },
 
     async upsertCustomer(row) {
@@ -77,6 +105,21 @@ export function createSupabaseStore(client: SupabaseClient): SyncStore {
       if (error) {
         throw new Error("order upsert failed");
       }
+    },
+
+    async recordConversion(input: ConversionInput) {
+      const { data, error } = await client.rpc("record_shopify_outreach_conversion", {
+        p_email: input.email,
+        p_order_id: input.shopifyOrderId,
+        p_amount: input.amount,
+        p_currency: input.currency,
+        p_barber_id: input.barberId,
+        p_organization_id: input.organizationId,
+      });
+      if (error) {
+        throw new Error("conversion record failed");
+      }
+      return data === true;
     },
   };
 }

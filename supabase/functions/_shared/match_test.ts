@@ -1,5 +1,5 @@
 import { assertEquals } from "./assert.ts";
-import { isFreeMailDomain, matchBarberLead, type BarberLead } from "./match.ts";
+import { isFreeMailDomain, matchBarberLead, matchParty, type BarberLead, type PartyCatalog } from "./match.ts";
 
 const salon: BarberLead = {
   id: "lead-salon",
@@ -101,6 +101,87 @@ Deno.test("returns no match when two leads share the same email", () => {
   const duplicate: BarberLead = { ...salon, id: "lead-duplicate" };
   const result = matchBarberLead("owner@example-barber.test", [salon, duplicate]);
   assertEquals(result, { leadId: null, reason: "none" });
+});
+
+const party: PartyCatalog = {
+  contacts: [{
+    id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    email: "buyer@example-barber.test",
+    organizationIds: [],
+  }],
+  barbers: [
+    {
+      id: "11111111-1111-4111-8111-111111111111",
+      email: "owner@example-barber.test",
+      organizationId: "22222222-2222-4222-8222-222222222222",
+      name: "Testsalong AB",
+      country: "SE",
+    },
+    {
+      id: "11111111-1111-4111-8111-111111111112",
+      email: null,
+      organizationId: "22222222-2222-4222-8222-222222222223",
+      name: "Andra Salongen",
+      country: "DE",
+    },
+  ],
+  organizations: [
+    {
+      id: "22222222-2222-4222-8222-222222222222",
+      displayName: "Testsalong AB",
+      domains: ["https://www.frisorsalong.se/kontakt"],
+      countryCodes: ["SE"],
+    },
+    {
+      id: "22222222-2222-4222-8222-222222222223",
+      displayName: "Andra Salongen",
+      domains: ["andra.example"],
+      countryCodes: ["DE"],
+    },
+    {
+      id: "22222222-2222-4222-8222-222222222224",
+      displayName: "Testsalong AB",
+      domains: ["gmail.com"],
+      countryCodes: ["SE"],
+    },
+  ],
+  leads: [salon],
+};
+
+Deno.test("matches a contact or barber by exact email before domain", () => {
+  const barber = matchParty("Owner@example-barber.test", "Other Name", "DE", party);
+  assertEquals(barber.reason, "email");
+  assertEquals(barber.barberId, "11111111-1111-4111-8111-111111111111");
+  assertEquals(barber.organizationId, "22222222-2222-4222-8222-222222222222");
+
+  const contact = matchParty("buyer@example-barber.test", null, null, party);
+  assertEquals(contact.reason, "email");
+  assertEquals(contact.contactId, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+  assertEquals(contact.barberId, null);
+});
+
+Deno.test("matches an organization by normalize_domain and skips free mail", () => {
+  const hit = matchParty("desk@frisorsalong.se", null, null, party);
+  assertEquals(hit.reason, "domain");
+  assertEquals(hit.organizationId, "22222222-2222-4222-8222-222222222222");
+  assertEquals(hit.barberId, "11111111-1111-4111-8111-111111111111");
+
+  const free = matchParty("other@gmail.com", null, null, party);
+  assertEquals(free.organizationId, null);
+  assertEquals(free.reason, "none");
+  assertEquals(matchParty("orders@shop.frisorsalong.se", null, null, party).organizationId, null);
+});
+
+Deno.test("matches one company name in one country and refuses an ambiguous name", () => {
+  const hit = matchParty("buyer@unknown-salon.test", "Andra Salongen", "DE", party);
+  assertEquals(hit.reason, "company");
+  assertEquals(hit.barberId, "11111111-1111-4111-8111-111111111112");
+  assertEquals(hit.organizationId, "22222222-2222-4222-8222-222222222223");
+
+  const ambiguous = matchParty("buyer@unknown-salon.test", "Testsalong AB", "SE", party);
+  assertEquals(ambiguous.reason, "none");
+  assertEquals(ambiguous.barberId, null);
+  assertEquals(ambiguous.organizationId, null);
 });
 
 Deno.test("returns no match when several leads share the domain", () => {

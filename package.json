@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "node src/server.js",
     "start": "node src/server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "test:sync": "deno test supabase/functions"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

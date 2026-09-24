@@ -1,0 +1,4 @@
+# Finance Gateway authenticates with its own bearer tokens, not a Supabase JWT.
+# Deploy with: supabase functions deploy finance-gateway --no-verify-jwt
+[functions.finance-gateway]
+verify_jwt = false

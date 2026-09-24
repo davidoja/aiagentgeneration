@@ -77,9 +77,9 @@ Implementerat i `src/routes/orders.js` och `src/services/orders.js`.
 
 ## 5) Shopify → Supabase order/customer sync
 
-Edge function `shopify-webhook` plus tables `public.shopify_orders` and `public.shopify_customers`. It verifies the Shopify HMAC, upserts orders and customers, and can link them to `public.apify_local_business_leads`.
+Edge functions `shopify-webhook` and `wholesale-inquiry`, plus tables `public.shopify_orders` and `public.shopify_customers`. The webhook verifies the Shopify HMAC, upserts orders and customers, and links them to `barbers`, `organizations`, and `contacts`. The wholesale function accepts the distributor form. Checkout is unchanged.
 
-This is not deployed. Migration, function deploy, and webhook registration are manual steps for after review. See [docs/shopify-supabase-sync.md](docs/shopify-supabase-sync.md).
+This is not deployed. Apply the migrations, deploy both functions with `--no-verify-jwt`, set the webhook secret, then register the webhooks. See [docs/shopify-supabase-sync.md](docs/shopify-supabase-sync.md).
 
 ```bash
 deno test supabase/functions

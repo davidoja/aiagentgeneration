@@ -29,10 +29,13 @@ export type PolicyRecord = {
   financialYearEnd: string | null;
 };
 
+export type OauthTokenKind = "refresh" | "client_credentials";
+
 export type OauthRecord = {
   accessToken: string | null;
-  refreshToken: string;
+  refreshToken: string | null;
   accessExpiresAt: string | null;
+  tokenKind: OauthTokenKind;
 };
 
 export type AuditEvent = {
@@ -95,6 +98,12 @@ export type ExchangeResult = {
   scope: string;
 };
 
+export type ClientCredentialsResult = {
+  accessToken: string;
+  expiresIn: number;
+  scope: string;
+};
+
 export type FortnoxResult = {
   status: number;
   body: unknown;
@@ -109,6 +118,7 @@ export type ArchiveUpload = {
 export type FortnoxClient = {
   refresh(refreshToken: string): Promise<RefreshResult>;
   exchangeCode(input: { code: string; redirectUri: string }): Promise<ExchangeResult>;
+  clientCredentials(input: { tenantId: string }): Promise<ClientCredentialsResult>;
   request(input: {
     accessToken: string;
     method: "GET" | "POST" | "PUT";

@@ -41,7 +41,7 @@ function memory(tokenHash: string): Memory {
     },
     agent,
     approvals: new Map(),
-    oauth: { accessToken: null, refreshToken: REFRESH_SENTINEL, accessExpiresAt: null },
+    oauth: { accessToken: null, refreshToken: REFRESH_SENTINEL, accessExpiresAt: null, tokenKind: "refresh" },
     audit: [],
     failPolicy: false,
     failBlocked: false,
@@ -146,11 +146,15 @@ function memory(tokenHash: string): Memory {
 }
 
 function mockFortnox() {
-  const calls: Array<{ kind: "refresh" | "request" | "exchange"; refreshToken?: string; accessToken?: string; method?: string; path?: string; code?: string; redirectUri?: string }> = [];
+  const calls: Array<{ kind: "refresh" | "request" | "exchange" | "client_credentials"; refreshToken?: string; accessToken?: string; method?: string; path?: string; code?: string; redirectUri?: string; tenantId?: string }> = [];
   const client: FortnoxClient = {
     refresh(refreshToken) {
       calls.push({ kind: "refresh", refreshToken });
       return Promise.resolve({ accessToken: ACCESS_SENTINEL, refreshToken: REFRESH_ROTATED, expiresIn: 3600 });
+    },
+    clientCredentials(input) {
+      calls.push({ kind: "client_credentials", tenantId: input.tenantId });
+      return Promise.resolve({ accessToken: ACCESS_SENTINEL, expiresIn: 3600, scope: "bookkeeping companyinformation" });
     },
     exchangeCode(input) {
       calls.push({ kind: "exchange", code: input.code, redirectUri: input.redirectUri });
@@ -203,6 +207,7 @@ async function setup() {
     adminToken: ADMIN_TOKEN,
     redirectUri: "https://localhost/fortnox-callback",
     expectedOauthState: "",
+    tenantId: "",
     store,
     fortnox: fortnox.client,
     now: () => NOW,
@@ -623,7 +628,7 @@ Deno.test("admin issues an agent token once and can seed a refresh token without
   assertOk(!JSON.stringify(seedBody).includes("seed-refresh-placeholder"));
   assertOk(!JSON.stringify(store.audit).includes("seed-refresh-placeholder"));
 
-  store.oauth = { accessToken: ACCESS_SENTINEL, refreshToken: REFRESH_ROTATED, accessExpiresAt: "2026-09-24T12:00:00.000Z" };
+  store.oauth = { accessToken: ACCESS_SENTINEL, refreshToken: REFRESH_ROTATED, accessExpiresAt: "2026-09-24T12:00:00.000Z", tokenKind: "refresh" };
   const used = await handleFinanceGateway(post(issued, { method: "GET", path: "/3/inbox" }), deps);
   assertEquals((await used.json()).decision, "allowed");
 });
@@ -695,5 +700,85 @@ Deno.test("an agent token cannot exchange a Fortnox code, and a failed save keep
   assertEquals(failed.fortnox.calls.map((call) => call.kind), ["exchange"]);
   assertEquals(failed.store.oauth?.refreshToken, REFRESH_SENTINEL);
   assertOk(!JSON.stringify(payload).includes("placeholder-auth-code"));
+  assertOk(!JSON.stringify(payload).includes(ACCESS_SENTINEL));
+});
+
+Deno.test("client credentials caches the access token and does not return it", async () => {
+  const first = await setup();
+  first.deps.tenantId = "123456";
+  first.store.oauth = { accessToken: null, refreshToken: REFRESH_SENTINEL, accessExpiresAt: null, tokenKind: "refresh" };
+  const response = await handleFinanceGateway(post(AGENT_TOKEN, { method: "GET", path: "/3/companyinformation" }), first.deps);
+  const payload = await response.json();
+  assertEquals(payload.decision, "allowed");
+  assertEquals(first.fortnox.calls.map((call) => call.kind), ["client_credentials", "request"]);
+  assertEquals(first.fortnox.calls[0].tenantId, "123456");
+  assertEquals(first.store.oauth?.tokenKind, "client_credentials");
+  assertEquals(first.store.oauth?.refreshToken, null);
+  assertEquals(first.store.oauth?.accessToken, ACCESS_SENTINEL);
+  const leaked = JSON.stringify(payload) + JSON.stringify(first.store.audit) + JSON.stringify(first.logs);
+  assertOk(!leaked.includes(ACCESS_SENTINEL));
+  assertOk(!JSON.stringify(first.logs).includes("tenantId"));
+
+  const second = await handleFinanceGateway(post(AGENT_TOKEN, { method: "GET", path: "/3/customers" }), first.deps);
+  assertEquals((await second.json()).decision, "allowed");
+  assertEquals(first.fortnox.calls.map((call) => call.kind), ["client_credentials", "request", "request"]);
+});
+
+Deno.test("client credentials is requested again inside the expiry skew and not on dry-run", async () => {
+  const soon = await setup();
+  soon.deps.tenantId = "123456";
+  soon.store.oauth = {
+    accessToken: "cached-access-placeholder",
+    refreshToken: null,
+    accessExpiresAt: new Date(NOW.getTime() + 30_000).toISOString(),
+    tokenKind: "client_credentials",
+  };
+  const refreshed = await handleFinanceGateway(post(AGENT_TOKEN, { method: "GET", path: "/3/vouchers" }), soon.deps);
+  assertEquals((await refreshed.json()).decision, "allowed");
+  assertEquals(soon.fortnox.calls.map((call) => call.kind), ["client_credentials", "request"]);
+  assertEquals(soon.fortnox.calls.filter((call) => call.kind === "refresh").length, 0);
+
+  const cached = await setup();
+  cached.deps.tenantId = "123456";
+  cached.store.oauth = {
+    accessToken: "cached-access-placeholder",
+    refreshToken: null,
+    accessExpiresAt: new Date(NOW.getTime() + 61_000).toISOString(),
+    tokenKind: "client_credentials",
+  };
+  const reused = await handleFinanceGateway(post(AGENT_TOKEN, { method: "GET", path: "/3/accounts" }), cached.deps);
+  const reusedBody = await reused.json();
+  assertEquals(reusedBody.decision, "allowed");
+  assertEquals(cached.fortnox.calls.map((call) => call.kind), ["request"]);
+  assertEquals(cached.fortnox.calls[0].accessToken, "cached-access-placeholder");
+  assertOk(!JSON.stringify(reusedBody).includes("cached-access-placeholder"));
+
+  const dry = await setup();
+  dry.deps.tenantId = "123456";
+  const dryRun = await handleFinanceGateway(post(AGENT_TOKEN, {
+    method: "GET",
+    path: "/3/suppliers",
+    dryRun: true,
+  }), dry.deps);
+  assertEquals((await dryRun.json()).decision, "dry_run");
+  assertEquals(dry.fortnox.calls.length, 0);
+});
+
+Deno.test("a bad tenant id fails closed and a failed cache write does not call the API", async () => {
+  const bad = await setup();
+  bad.deps.tenantId = "not-a-tenant";
+  const rejected = await handleFinanceGateway(post(AGENT_TOKEN, { method: "GET", path: "/3/inbox" }), bad.deps);
+  assertEquals((await rejected.json()).reason, "server_misconfigured");
+  assertEquals(bad.fortnox.calls.length, 0);
+
+  const failed = await setup();
+  failed.deps.tenantId = "123456";
+  failed.store.failOauthSave = true;
+  const response = await handleFinanceGateway(post(AGENT_TOKEN, { method: "GET", path: "/3/inbox" }), failed.deps);
+  const payload = await response.json();
+  assertEquals(response.status, 503);
+  assertEquals(payload.reason, "oauth_persist_failed");
+  assertEquals(failed.fortnox.calls.map((call) => call.kind), ["client_credentials"]);
+  assertEquals(failed.store.oauth?.refreshToken, REFRESH_SENTINEL);
   assertOk(!JSON.stringify(payload).includes(ACCESS_SENTINEL));
 });

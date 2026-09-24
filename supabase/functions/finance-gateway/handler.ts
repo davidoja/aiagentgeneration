@@ -1,5 +1,5 @@
 import { matchRoute, normalizeQuery } from "./allowlist.ts";
-import { decodeArchive, DEFAULT_FORTNOX_REDIRECT_URI, extractOAuthCallback, normalizeRedirectUri, scopesFrom } from "./fortnox.ts";
+import { decodeArchive, DEFAULT_FORTNOX_REDIRECT_URI, extractOAuthCallback, isFortnoxTenantId, normalizeRedirectUri, scopesFrom } from "./fortnox.ts";
 import { payloadHash, sha256Hex, timingSafeEqual } from "./hash.ts";
 import { assessWrite, matchApprovals, stockholmDate } from "./policy.ts";
 import { redact } from "./redact.ts";
@@ -9,11 +9,14 @@ export type GatewayDeps = {
   adminToken: string;
   redirectUri: string;
   expectedOauthState: string;
+  tenantId: string;
   store: FinanceStore;
   fortnox: FortnoxClient;
   now: () => Date;
   log?: (event: Record<string, unknown>) => void;
 };
+
+const ACCESS_SKEW_MS = 60_000;
 
 const ENVELOPE_KEYS = new Set([
   "method",
@@ -83,19 +86,68 @@ function baseAudit(partial: Omit<AuditEvent, "payloadHash"> & { payloadHash?: st
   return { ...partial, payloadHash: hash };
 }
 
-async function ensureAccess(deps: GatewayDeps, now: Date): Promise<{ accessToken: string; secrets: string[] } | { error: string }> {
-  let current: OauthRecord | null;
+function accessStillValid(current: OauthRecord | null, now: Date, kind: OauthRecord["tokenKind"]): boolean {
+  if (!current || current.tokenKind !== kind || !current.accessToken) {
+    return false;
+  }
+  const expiry = current.accessExpiresAt ? Date.parse(current.accessExpiresAt) : 0;
+  return expiry - now.getTime() > ACCESS_SKEW_MS;
+}
+
+async function loadOauth(deps: GatewayDeps): Promise<OauthRecord | null | { error: string }> {
   try {
-    current = await deps.store.getOauth();
+    return await deps.store.getOauth();
   } catch {
     return { error: "oauth_unavailable" };
   }
-  if (!current?.refreshToken) {
+}
+
+async function ensureClientCredentials(
+  deps: GatewayDeps,
+  now: Date,
+  tenantId: string,
+): Promise<{ accessToken: string; secrets: string[] } | { error: string }> {
+  if (!isFortnoxTenantId(tenantId)) {
+    return { error: "server_misconfigured" };
+  }
+  const current = await loadOauth(deps);
+  if (current && "error" in current) {
+    return current;
+  }
+  if (accessStillValid(current, now, "client_credentials") && current?.accessToken) {
+    return { accessToken: current.accessToken, secrets: [current.accessToken] };
+  }
+  let minted;
+  try {
+    minted = await deps.fortnox.clientCredentials({ tenantId });
+  } catch (error) {
+    const unconfigured = error instanceof Error && error.message === "oauth_unconfigured";
+    return { error: unconfigured ? "server_misconfigured" : "oauth_client_credentials_failed" };
+  }
+  const next: OauthRecord = {
+    accessToken: minted.accessToken,
+    refreshToken: null,
+    accessExpiresAt: new Date(now.getTime() + minted.expiresIn * 1000).toISOString(),
+    tokenKind: "client_credentials",
+  };
+  try {
+    await deps.store.saveOauth(next);
+  } catch {
+    return { error: "oauth_persist_failed" };
+  }
+  return { accessToken: minted.accessToken, secrets: [minted.accessToken] };
+}
+
+async function ensureRefreshToken(deps: GatewayDeps, now: Date): Promise<{ accessToken: string; secrets: string[] } | { error: string }> {
+  const current = await loadOauth(deps);
+  if (current && "error" in current) {
+    return current;
+  }
+  if (!current?.refreshToken || current.tokenKind === "client_credentials") {
     return { error: "oauth_unavailable" };
   }
-  const expiry = current.accessExpiresAt ? Date.parse(current.accessExpiresAt) : 0;
-  if (current.accessToken && expiry - now.getTime() > 60_000) {
-    return { accessToken: current.accessToken, secrets: [current.accessToken, current.refreshToken] };
+  if (accessStillValid(current, now, "refresh")) {
+    return { accessToken: current.accessToken as string, secrets: [current.accessToken as string, current.refreshToken] };
   }
   let refreshed;
   try {
@@ -110,6 +162,7 @@ async function ensureAccess(deps: GatewayDeps, now: Date): Promise<{ accessToken
     accessToken: refreshed.accessToken,
     refreshToken: refreshed.refreshToken,
     accessExpiresAt: new Date(now.getTime() + refreshed.expiresIn * 1000).toISOString(),
+    tokenKind: "refresh",
   };
   try {
     await deps.store.saveOauth(next);
@@ -120,6 +173,14 @@ async function ensureAccess(deps: GatewayDeps, now: Date): Promise<{ accessToken
     accessToken: refreshed.accessToken,
     secrets: [refreshed.accessToken, refreshed.refreshToken, current.refreshToken],
   };
+}
+
+async function ensureAccess(deps: GatewayDeps, now: Date): Promise<{ accessToken: string; secrets: string[] } | { error: string }> {
+  const tenantId = deps.tenantId.trim();
+  if (tenantId) {
+    return ensureClientCredentials(deps, now, tenantId);
+  }
+  return ensureRefreshToken(deps, now);
 }
 
 function parseEnvelope(payload: unknown): AgentEnvelope | { error: string } {
@@ -394,6 +455,7 @@ async function handleAdmin(
           accessToken: exchanged.accessToken,
           refreshToken: exchanged.refreshToken,
           accessExpiresAt: new Date(now.getTime() + exchanged.expiresIn * 1000).toISOString(),
+          tokenKind: "refresh",
         });
       } catch {
         return finish(503, { ok: false, decision: "error", reason: "oauth_persist_failed", fortnoxCalled: true }, "error", "oauth_persist_failed");
@@ -406,7 +468,7 @@ async function handleAdmin(
       if (typeof refreshToken !== "string" || refreshToken.length < 8 || refreshToken.length > 500) {
         return finish(400, { ok: false, decision: "denied", reason: "invalid_oauth", fortnoxCalled: false }, "denied", "invalid_oauth");
       }
-      await deps.store.saveOauth({ accessToken: null, refreshToken, accessExpiresAt: null });
+      await deps.store.saveOauth({ accessToken: null, refreshToken, accessExpiresAt: null, tokenKind: "refresh" });
       return finish(200, { ok: true, decision: "allowed", fortnoxCalled: false }, "allowed", null);
     }
 

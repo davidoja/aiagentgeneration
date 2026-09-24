@@ -26,6 +26,7 @@ Deno.serve((req) => {
       adminToken: Deno.env.get("FINANCE_ADMIN_TOKEN") ?? "",
       redirectUri: Deno.env.get("FORTNOX_REDIRECT_URI") || DEFAULT_FORTNOX_REDIRECT_URI,
       expectedOauthState: Deno.env.get("FORTNOX_OAUTH_STATE") ?? "",
+      tenantId: Deno.env.get("FORTNOX_TENANT_ID") ?? "",
       store: createSupabaseFinanceStore(createServiceRoleClient()),
       fortnox: createFortnoxClient({
         clientId: Deno.env.get("FORTNOX_CLIENT_ID") ?? "",

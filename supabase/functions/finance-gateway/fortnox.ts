@@ -1,4 +1,4 @@
-import type { ArchiveUpload, ExchangeResult, FortnoxClient, FortnoxResult, RefreshResult } from "./types.ts";
+import type { ArchiveUpload, ClientCredentialsResult, ExchangeResult, FortnoxClient, FortnoxResult, RefreshResult } from "./types.ts";
 
 const TOKEN_URL = "https://apps.fortnox.se/oauth-v1/token";
 const API_ORIGIN = "https://api.fortnox.se";
@@ -7,6 +7,11 @@ export const DEFAULT_FORTNOX_REDIRECT_URI = "https://localhost/fortnox-callback"
 
 const AUTH_CODE = /^[A-Za-z0-9._~-]{8,512}$/;
 const OAUTH_STATE = /^[A-Za-z0-9._~-]{1,200}$/;
+const TENANT_ID = /^[0-9]{1,20}$/;
+
+export function isFortnoxTenantId(value: string): boolean {
+  return TENANT_ID.test(value);
+}
 
 export type FortnoxHttp = (input: string, init: RequestInit) => Promise<Response>;
 
@@ -96,6 +101,42 @@ export function createFortnoxClient(options: {
         throw new Error("oauth_exchange_failed");
       }
       return { accessToken, refreshToken: nextRefresh, expiresIn, scope };
+    },
+
+    async clientCredentials(input): Promise<ClientCredentialsResult> {
+      if (!options.clientId || !options.clientSecret) {
+        throw new Error("oauth_unconfigured");
+      }
+      if (!isFortnoxTenantId(input.tenantId)) {
+        throw new Error("oauth_unconfigured");
+      }
+      // Scope is omitted on purpose. Fortnox then uses the service-account
+      // consent. https://www.fortnox.se/developer/authorization/get-access-token-using-client-credentials
+      const response = await fetchImpl(TOKEN_URL, {
+        method: "POST",
+        redirect: "error",
+        headers: {
+          "authorization": basic(options.clientId, options.clientSecret),
+          "content-type": "application/x-www-form-urlencoded",
+          "accept": "application/json",
+          "TenantId": input.tenantId,
+        },
+        body: new URLSearchParams({
+          grant_type: "client_credentials",
+        }),
+      });
+      const payload = await readBody(response);
+      if (!response.ok || !payload || typeof payload !== "object") {
+        throw new Error("oauth_client_credentials_failed");
+      }
+      const record = payload as Record<string, unknown>;
+      const accessToken = record.access_token;
+      const expiresIn = record.expires_in;
+      const scope = typeof record.scope === "string" ? record.scope : "";
+      if (typeof accessToken !== "string" || accessToken.length < 8 || typeof expiresIn !== "number" || expiresIn <= 0) {
+        throw new Error("oauth_client_credentials_failed");
+      }
+      return { accessToken, expiresIn, scope };
     },
 
     async request(input): Promise<FortnoxResult> {

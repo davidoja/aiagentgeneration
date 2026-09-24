@@ -1,16 +1,16 @@
 # Finance Gateway
 
-Ekonomi-Erik får aldrig anropa Fortnox direkt. Edge-funktionen `finance-gateway` är den enda vägen. Fortnox-klient, access token och refresh token ligger bara på serversidan. Allowlist, ASK-konton, period, beloppsgräns, engångsgodkännande och nödstopp avgörs i funktionen. Ett anrop som inte står i allowlisten finns inte.
+Ekonomi-Erik får aldrig anropa Fortnox direkt. Edge-funktionen `finance-gateway` är den enda vägen. Fortnox-klient, tenant id och access token ligger bara på serversidan. Allowlist, ASK-konton, period, beloppsgräns, engångsgodkännande och nödstopp avgörs i funktionen. Ett anrop som inte står i allowlisten finns inte.
 
 Inget i det här repot applicerar migrationen, deployar funktionen eller mergar. Gör stegen nedan först efter granskning och merge.
 
 ## Säkerhetsmodell
 
 - Erik autentiserar med en egen bearer-token (`fg_…`). Den sparas bara som SHA-256. Admin-vägen visar klartexten en gång. En återkallad token slutar fungera.
-- Fortnox `client_id` och `client_secret` är Supabase-hemligheter (`FORTNOX_CLIENT_ID`, `FORTNOX_CLIENT_SECRET`). David klistrar in dem i Supabase-dashboarden. De ska inte ligga på en delad dator och inte skickas med curl till Fortnox.
-- Första kopplingen är `POST /admin/oauth/exchange-code`. Funktionen byter själv koden hos Fortnox och sparar access token och refresh token. Svaret innehåller bara scopes.
-- Access token och refresh token ligger i `finance_oauth_tokens`. Tabellen har tvingad RLS, inga policies och inga grants till `anon` eller `authenticated`. Bara service role, via funktionen, läser och skriver den.
-- Fortnox roterar refresh token vid varje refresh. Den gamla slutar gälla direkt. Funktionen sparar den nya innan API-anropet. Misslyckas sparningen görs inget bokföringsanrop. Se [Get Refresh-Token](https://www.fortnox.se/developer/authorization/get-refresh-token) och [Authorization](https://www.fortnox.se/developer/authorization): ny refresh token skapas, den gamla blir ogiltig, livslängd 45 dagar, access token 1 timme.
+- Standardvägen är client credentials. Supabase-hemligheterna är `FORTNOX_CLIENT_ID`, `FORTNOX_CLIENT_SECRET` och `FORTNOX_TENANT_ID`. När tenant id är satt hämtar funktionen själv en kortlivad access token. David öppnar ingen consent-länk och kör inget skript.
+- Anropet är `POST https://apps.fortnox.se/oauth-v1/token` med `Content-Type: application/x-www-form-urlencoded`, `Authorization: Basic` (base64 av `client_id:client_secret`) och headern `TenantId` med det numeriska tenant-id:t. Bodyn är `grant_type=client_credentials`. Scope utelämnas, så Fortnox använder scopes från service-kontots samtycke. Svaret innehåller `access_token`, `expires_in` (3600), `token_type` och `scope`. Det innehåller ingen refresh token. [Get Access-Token using Client-Credentials](https://www.fortnox.se/developer/authorization/get-access-token-using-client-credentials).
+- Access token cachas i `finance_oauth_tokens` med `token_kind = client_credentials` och `refresh_token` null. En ny token hämtas när det är 60 sekunder eller mindre kvar. Token skrivs inte till loggen och skickas inte i svaret till Erik. Tabellen har tvingad RLS, inga policies och inga grants till `anon` eller `authenticated`.
+- Om `FORTNOX_TENANT_ID` är tom används reservvägen med authorization code och refresh token. Fortnox roterar då refresh token vid varje refresh, och funktionen sparar den nya innan API-anropet. Misslyckas sparningen görs inget bokföringsanrop. Se [Get Refresh-Token](https://www.fortnox.se/developer/authorization/get-refresh-token). Det är inte standardvägen.
 - Admin-vägen kräver `FINANCE_ADMIN_TOKEN`. Agent-token kan inte ändra policy, godkännanden, nödstopp eller OAuth.
 - Svar och audit-loggen kapas på fält som heter token, secret, password, authorization eller refresh. Loggraden innehåller agent, metod, path, payload-hash, resultat, reason, source och decision. Ingen råbody och ingen hemlighet.
 - `finance_audit_log` är append-only (ingen update/delete-grant, trigger som avvisar ändring och truncate).
@@ -158,8 +158,8 @@ Kuvertet kan skicka `approvalId` eller `approvalIds` (högst två, ett per behov
 | POST `/admin/kill-switch` | Globalt nödstopp |
 | POST `/admin/policy` | `{ "amountThresholdSek": 10000, "financialYearStart": "2026-01-01", "financialYearEnd": "2026-12-31" }` |
 | POST `/admin/approvals` | Skapar engångsgodkännande |
-| POST `/admin/oauth/exchange-code` | `{ "code": "…" }` eller `{ "redirectUrl": "https://localhost/fortnox-callback?code=…&state=…" }`. Funktionen byter koden hos Fortnox. Svaret är `scopes`, aldrig token |
-| POST `/admin/oauth/refresh-token` | Reservväg om en refresh token redan finns. Inte Davids go-live-väg. Svaret innehåller inte token |
+| POST `/admin/oauth/exchange-code` | Reservväg utan `FORTNOX_TENANT_ID`. `{ "code": "…" }` eller en redirect-URL. Svaret är `scopes`, aldrig token |
+| POST `/admin/oauth/refresh-token` | Reservväg om en refresh token redan finns. Svaret innehåller inte token |
 | POST `/admin/payload-hash` | `{ "body": { } }` returnerar hash |
 | GET `/admin/audit?limit=50` | Senaste raderna, utan hemligheter |
 
@@ -167,60 +167,30 @@ Bas-URL: `https://<project-ref>.supabase.co/functions/v1/finance-gateway`.
 
 ## Vad David gör
 
-Gör detta på din egen Mac, efter att Mattias har deployat funktionen. Client secret och admin-token klistras bara in i Supabase. De ska inte till Slack, git, den delade Linux-burken, eller en curl mot Fortnox.
-
-1. I Supabase-dashboarden, under Edge Function secrets, lägg in `FORTNOX_CLIENT_ID`, `FORTNOX_CLIENT_SECRET` och `FINANCE_ADMIN_TOKEN`. Admin-token kan du skapa med en lösenordsgenerator (lång slumptext).
-2. Spara admin-token i din lösenordshanterare. Den behövs varje gång du kör skriptet nedan.
-3. I Fortnox Developer Portal: rotera client secret. Klistra in den nya secret direkt i Supabase-fältet `FORTNOX_CLIENT_SECRET`. Registrera redirect-URI `https://localhost/fortnox-callback`. Scopes som behövs: `bookkeeping`, `invoice`, `supplierinvoice`, `payment`, `customer`, `supplier`, `inbox`, `archive`, `connectfile`, `companyinformation`. Ta inte med `settings`. [Fortnox scopes](https://www.fortnox.se/developer/guides-and-good-to-know/scopes).
-4. Öppna godkännandelänken i webbläsaren. Byt `<FORTNOX_CLIENT_ID>` mot samma client id som du lade i Supabase. Client id är inte secret. Secret ska inte in i länken. `access_type=offline` gör att Fortnox ger en refresh token. Sidan på localhost kommer inte att ladda. Kopiera hela adressen i adressfältet ändå. Den innehåller `code`.
-
-```text
-https://apps.fortnox.se/oauth-v1/auth?client_id=<FORTNOX_CLIENT_ID>&redirect_uri=https%3A%2F%2Flocalhost%2Ffortnox-callback&scope=bookkeeping%20invoice%20supplierinvoice%20payment%20customer%20supplier%20inbox%20archive%20connectfile%20companyinformation&access_type=offline&response_type=code
-```
-
-Vill du att gatewayen ska kräva `state`, lägg samma värde i hemligheten `FORTNOX_OAUTH_STATE` och som `&state=` i länken. Lämna hemligheten tom om du inte använder det.
-
-5. På din Mac, i katalogen där `golive.sh` ligger:
-
-```bash
-bash supabase/functions/finance-gateway/golive.sh
-```
-
-Skriptet frågar efter admin-token (den syns inte), project ref, och adressen du kopierade. Det anropar bara Supabase. Funktionen byter koden hos Fortnox. Du ska se scopes, inte någon token.
-
-6. Fortsätt med samma skript, fortfarande på din Mac:
-
-```bash
-bash supabase/functions/finance-gateway/golive.sh create-agent
-bash supabase/functions/finance-gateway/golive.sh set-policy
-```
-
-`create-agent` visar Eriks token en gång. Ge den till Erik och spara den inte i git. `set-policy` frågar efter beloppsgränsen (förslag 10000) och räkenskapsåret. Bekräfta 10 000 SEK per rad för ombokning, periodisering och nedskrivning, eller skriv ett annat tal.
-
-7. När checklistan längre ner är grön:
-
-```bash
-bash supabase/functions/finance-gateway/golive.sh kill-switch off
-```
-
-`kill-switch on` slår på stoppet igen. `audit` visar loggen utan Fortnox-token.
-
-8. Om Fortnox client secret, admin-token eller refresh token fortfarande ligger på den delade Linux-burken från tidigare, ta bort dem. Den här vägen lägger dem inte där.
+Inget i standardvägen. När `FORTNOX_TENANT_ID` är satt hämtar gatewayen access token själv. David roterar inte client secret, öppnar ingen consent-länk och kör inte `golive.sh`.
 
 ## Vad Minnes-Mattias gör
 
-Mattias applicerar migrationen, deployar funktionen och kontrollerar RLS. Han hanterar inte värdena för Fortnox client secret, client id, admin-token eller OAuth-token. De sätter David i dashboarden. `supabase secrets list` visar namn, inte värden, och räcker om Mattias vill se att namnen finns.
+Mattias applicerar migrationerna, sätter hemlighetsnamnen, deployar funktionen, kör SQL-bootstrap och kontrollerar RLS. Värdena ska inte in i git, Slack eller en delad burk.
 
-1. Merga inte förrän PR:en är granskad. Applicera inte migrationen mot någon hostad Supabase från en feature-branch.
-2. Efter merge, på rätt projekt:
+1. Merga inte förrän PR:en är granskad. Applicera inte migrationerna mot någon hostad Supabase från en feature-branch.
+2. Efter merge, på rätt projekt, applicera båda filerna i ordning:
 
 ```bash
 supabase db push
 ```
 
-eller kör `supabase/migrations/20260924210000_finance_gateway.sql` i SQL-editorn. Migrationen rör inte Shopify-tabellerna.
+eller kör först `supabase/migrations/20260924210000_finance_gateway.sql` och sedan `supabase/migrations/20260924223000_finance_oauth_client_credentials.sql` i SQL-editorn. Migrationerna rör inte Shopify-tabellerna. Nödstoppet förblir påslaget. Audit-loggen förblir append-only.
 
-3. Verifiera RLS och grants:
+3. Lägg de här namnen under Edge Function secrets. Värdena kommer från den befintliga Fortnox-integrationen, inte från en ny consent:
+
+- `FORTNOX_CLIENT_ID`
+- `FORTNOX_CLIENT_SECRET`
+- `FORTNOX_TENANT_ID`
+
+`FORTNOX_TENANT_ID` är det numeriska tenant-id:t (samma värde som `DatabaseNumber`). `FINANCE_ADMIN_TOKEN` behövs inte för SQL-bootstrap. Sätt den bara om admin-vägarna anropas med curl. Lämna `FORTNOX_REDIRECT_URI` och `FORTNOX_OAUTH_STATE` tomma i standardvägen.
+
+4. Verifiera RLS och grants:
 
 ```sql
 select c.relname, c.relrowsecurity, c.relforcerowsecurity
@@ -231,33 +201,79 @@ where n.nspname = 'public' and c.relname like 'finance_%';
 
 `relrowsecurity` och `relforcerowsecurity` ska vara true. `anon` och `authenticated` ska sakna grants. `finance_audit_log` ska bara ha select och insert för `service_role`.
 
-4. Deploya, utan att sätta Fortnox-secret eller admin-token:
+5. Deploya:
 
 ```bash
 supabase functions deploy finance-gateway --no-verify-jwt
 ```
 
-`FORTNOX_REDIRECT_URI` behöver inte sättas om redirecten är `https://localhost/fortnox-callback`. Den är standard i funktionen.
+6. Bootstrap utan skript för David. Kör `supabase/functions/finance-gateway/bootstrap.sql` som service role i SQL-editorn, efter att hash-platsen bytts ut. På operatörens egen maskin:
 
-5. Kontrollera att en GET utan bearer ger 401, att DELETE mot en betalning ger `delete_forbidden`, och att en verifikation i dry-run inte syns i Fortnox.
-6. Access token och refresh token ska bara finnas i `finance_oauth_tokens` efter Davids `golive.sh`. Lägg dem inte i funktionsloggar, i en `.env` på burken, eller i en annan tabell med policy för `authenticated`.
+```bash
+TOKEN=$(openssl rand -hex 32)
+printf 'fg_%s\n' "$TOKEN"
+printf '%s' "fg_${TOKEN}" | sha256sum | awk '{print $1}'
+unset TOKEN
+```
+
+Den första raden är Eriks token. Ge den till Erik en gång. Klistra bara in de 64 hextecknen i `bootstrap.sql`. Filen sätter räkenskapsår `2026-01-01` till `2026-12-31`, beloppsgräns 10 000 SEK och lämnar nödstoppet på. Inserten avvisas tills hashen är 64 hextecken.
+
+7. När checklistan är grön, slå av nödstoppet i SQL-editorn:
+
+```sql
+update public.finance_policy
+set global_kill_switch = false,
+    kill_switch_reason = 'Go-live',
+    updated_at = now()
+where id = 1;
+```
+
+Slå på det igen med `global_kill_switch = true`.
+
+Samma bootstrap finns som curl om `FINANCE_ADMIN_TOKEN` är satt. Det är valfritt. SQL-vägen ovan är standard.
+
+```bash
+curl -sS -X POST \
+  -H "Authorization: Bearer $FINANCE_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"amountThresholdSek":10000,"financialYearStart":"2026-01-01","financialYearEnd":"2026-12-31"}' \
+  "https://<project-ref>.supabase.co/functions/v1/finance-gateway/admin/policy"
+
+curl -sS -X POST \
+  -H "Authorization: Bearer $FINANCE_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Ekonomi-Erik"}' \
+  "https://<project-ref>.supabase.co/functions/v1/finance-gateway/admin/agents"
+
+curl -sS -X POST \
+  -H "Authorization: Bearer $FINANCE_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"engaged":false,"reason":"go-live"}' \
+  "https://<project-ref>.supabase.co/functions/v1/finance-gateway/admin/kill-switch"
+```
+
+`create-agent`-svaret visar Eriks token en gång. Spara den inte i git.
+
+8. Kontrollera att en GET utan bearer ger 401, att DELETE mot en betalning ger `delete_forbidden`, och att en verifikation i dry-run inte syns i Fortnox.
+9. Access token ska bara finnas i `finance_oauth_tokens` efter att Erik har gjort ett anrop. I client-credentials-läge är `refresh_token` null och `token_kind` är `client_credentials`. Lägg inte token i funktionsloggar eller i en `.env` i repot.
 
 `SUPABASE_URL` och `SUPABASE_SERVICE_ROLE_KEY` finns redan i Edge Functions-miljön.
 
+## Reservväg utan tenant id
+
+Om `FORTNOX_TENANT_ID` lämnas tom använder funktionen den tidigare refresh-token-vägen. Den kräver authorization code en gång, via `POST /admin/oauth/exchange-code` eller `golive.sh`. Använd den inte när tenant id finns. Admin-vägarna finns kvar för det fallet.
+
 ## Go-live-checklista
 
-- [ ] PR mergad av en människa. Migrationen är inte körd före det.
-- [ ] RLS forced och grants verifierade.
-- [ ] David har lagt client id, client secret och admin-token i Supabase-dashboarden. Mattias har inte sett värdena.
-- [ ] Client secret roterad i Fortnox och inklistrad direkt i Supabase. Gamla secret är död.
-- [ ] Appen om-auktoriserad utan `settings`. David körde `golive.sh` med redirect-adressen. Svaret visade scopes och ingen token.
-- [ ] Eriks agent-token utfärdad med `golive.sh create-agent` och lagrad bara hos Erik. Hash i `finance_agents`.
-- [ ] Räkenskapsår satt. Beloppsgränsen 10 000 SEK bekräftad eller ändrad.
+- [ ] PR mergad av en människa. Migrationerna är inte körda före det.
+- [ ] Båda migrationerna applicerade. RLS forced och grants verifierade.
+- [ ] `FORTNOX_CLIENT_ID`, `FORTNOX_CLIENT_SECRET` och `FORTNOX_TENANT_ID` satta som Edge Function-hemligheter. Inga värden i git.
+- [ ] `bootstrap.sql` körd: Eriks hash i `finance_agents`, räkenskapsår 2026-01-01 till 2026-12-31, beloppsgräns 10 000 SEK. Klartext-token bara hos Erik.
 - [ ] Dry-run av en vanlig verifikation ger `dry_run` och inget Fortnox-anrop.
 - [ ] Ett anrop mot ett ASK-konto utan godkännande ger `ask_account`.
 - [ ] DELETE och `/3/settings/company` vägras.
-- [ ] Nödstoppet slås av av David.
-- [ ] Eventuella gamla Fortnox-credentials och admin-token är borta från den delade Linux-burken. De har inte lagts dit i den här vägen.
+- [ ] Nödstoppet slås av i SQL efter punkterna ovan.
+- [ ] Ett lyckat anrop cachar access token med `token_kind = client_credentials` och `refresh_token` null. Token syns inte i svaret eller loggen.
 
 ## Fortnox-händelser
 
@@ -282,8 +298,8 @@ Webhooks i Fortnox täcker inte bokföringsytan. De som finns är smalare (till 
 deno test --allow-read=supabase/migrations supabase/functions/finance-gateway
 ```
 
-Testerna mockar Fortnox. De täcker allowlist, DELETE, inställningar, ASK-konto, engångs- och utgånget godkännande, period, beloppsgräns, nödstopp, felaktig agent-token, dry-run utan anrop, att en roterad refresh token sparas, och att `exchange-code` tar en kod eller en redirect-URL, sparar token och bara returnerar scopes.
+Testerna mockar Fortnox. De täcker allowlist, DELETE, inställningar, ASK-konto, engångs- och utgånget godkännande, period, beloppsgräns, nödstopp, felaktig agent-token, dry-run utan anrop, att en roterad refresh token sparas, att `exchange-code` tar en kod eller en redirect-URL, och att client credentials skickar `TenantId` plus `grant_type=client_credentials`, cachar access token utan refresh token och inte returnerar token.
 
 ## Driftstatus
 
-Funktionen är inte deployad. Migrationen är inte applicerad. Inga riktiga kundnummer, organisationsnummer eller Fortnox-uppgifter finns i repot.
+Funktionen är inte deployad. Migrationerna är inte applicerade. Inga riktiga kundnummer, organisationsnummer eller Fortnox-uppgifter finns i repot.

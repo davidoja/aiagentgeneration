@@ -82,3 +82,16 @@ Deno.test("the migration seeds every blocked range and forces RLS", async () => 
   assertOk(!sql.includes("eyJ"));
   assertOk(!/refresh_token\s*=\s*'/.test(sql));
 });
+
+Deno.test("the client-credentials migration does not grant anon or seed a token", async () => {
+  const sql = await Deno.readTextFile(new URL("../../migrations/20260924223000_finance_oauth_client_credentials.sql", import.meta.url));
+  assertOk(sql.includes("token_kind in ('refresh', 'client_credentials')"));
+  assertOk(sql.includes("token_kind = 'client_credentials'"));
+  assertOk(sql.includes("refresh_token is null"));
+  assertOk(!/^\s*grant\b/im.test(sql));
+  assertOk(!/to anon\b/.test(sql));
+  assertOk(!/to authenticated\b/.test(sql));
+  assertOk(!sql.includes("disable row level security"));
+  assertOk(!sql.includes("eyJ"));
+  assertOk(!/access_token\s*=\s*'/.test(sql));
+});

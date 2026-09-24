@@ -140,17 +140,22 @@ export function createSupabaseFinanceStore(client: SupabaseClient): FinanceStore
       }
     },
     async getOauth() {
-      const { data, error } = await client.from("finance_oauth_tokens").select("access_token,refresh_token,access_expires_at").eq("id", 1).maybeSingle();
+      const { data, error } = await client.from("finance_oauth_tokens").select("access_token,refresh_token,access_expires_at,token_kind").eq("id", 1).maybeSingle();
       if (error) {
         throw new Error("oauth lookup failed");
       }
-      if (!data?.refresh_token) {
+      if (!data) {
+        return null;
+      }
+      const tokenKind = data.token_kind === "client_credentials" ? "client_credentials" : "refresh";
+      if (tokenKind === "refresh" && !data.refresh_token) {
         return null;
       }
       return {
         accessToken: data.access_token ? String(data.access_token) : null,
-        refreshToken: String(data.refresh_token),
+        refreshToken: data.refresh_token ? String(data.refresh_token) : null,
         accessExpiresAt: data.access_expires_at ? String(data.access_expires_at) : null,
+        tokenKind,
       } satisfies OauthRecord;
     },
     async saveOauth(next) {
@@ -159,6 +164,7 @@ export function createSupabaseFinanceStore(client: SupabaseClient): FinanceStore
         access_token: next.accessToken,
         refresh_token: next.refreshToken,
         access_expires_at: next.accessExpiresAt,
+        token_kind: next.tokenKind,
         rotated_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       });

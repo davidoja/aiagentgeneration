@@ -74,3 +74,13 @@ Implementerat i `src/routes/orders.js` och `src/services/orders.js`.
 3. Exponera endpoints och registrera webhook-URL:er i Shopify.
 
 > För produktion: byt `tokenStore` till en extern databas/kv-store för att överleva cold starts.
+
+## 5) Shopify → Supabase order/customer sync
+
+Edge functions `shopify-webhook` and `wholesale-inquiry`, plus tables `public.shopify_orders` and `public.shopify_customers`. The webhook verifies the Shopify HMAC, upserts orders and customers, and links them to `barbers`, `organizations`, and `contacts`. The wholesale function accepts the distributor form. Checkout is unchanged.
+
+This is not deployed. Apply the migrations, deploy both functions with `--no-verify-jwt`, set the webhook secret, then register the webhooks. See [docs/shopify-supabase-sync.md](docs/shopify-supabase-sync.md).
+
+```bash
+deno test supabase/functions
+```
